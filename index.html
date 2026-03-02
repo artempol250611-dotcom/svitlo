@@ -1,34 +1,124 @@
 <!DOCTYPE html>
 <html lang="uk">
 <head>
-    <meta charset="UTF-8">
-    <title>Графік світла</title>
-    <script>
-        async function loadData() {
-            const res = await fetch("/data");
-            const data = await res.json();
-            const container = document.getElementById("queues");
-            container.innerHTML = "";
+<meta charset="UTF-8">
+<title>Графік світла</title>
 
-            const now = new Date();
-            const nowStr = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+<style>
+body{
+    font-family: Arial;
+    background:#0f172a;
+    color:white;
+    text-align:center;
+}
 
-            for (let q in data) {
-                const info = data[q];
-                const status = info === "on" ? "🟢" : "🔴";
-                let periodsHTML = "";
-                for (let p of info.periods) {
-                    let cls = (p.start <= nowStr && nowStr <= p.end) ? "current" : "";
-                    periodsHTML += `<div class="${cls}">${p.start} - ${p.end}</div>`;
+.tabs button{
+    padding:10px 20px;
+    margin:10px;
+    border:none;
+    border-radius:10px;
+    cursor:pointer;
+    font-size:16px;
+}
+
+.card{
+    background:#1e293b;
+    margin:15px auto;
+    padding:15px;
+    border-radius:15px;
+    width:320px;
+}
+
+.on{color:#22c55e;}
+.off{color:#ef4444;}
+
+.active{
+    border:2px solid yellow;
+}
+
+.period{
+    font-size:14px;
+    opacity:0.8;
+}
+</style>
+</head>
+
+<body>
+
+<h1>💡 Графік відключень</h1>
+
+<div class="tabs">
+    <button onclick="showTab('today')">Сьогодні</button>
+    <button onclick="showTab('tomorrow')">Завтра</button>
+</div>
+
+<div id="today"></div>
+<div id="tomorrow" style="display:none;"></div>
+
+<script>
+
+let currentTab = "today";
+
+function showTab(tab){
+    currentTab = tab;
+    document.getElementById("today").style.display="none";
+    document.getElementById("tomorrow").style.display="none";
+    document.getElementById(tab).style.display="block";
+}
+
+function isNowInPeriod(start,end){
+    const now = new Date();
+    const current = now.toTimeString().slice(0,5);
+    return current >= start && current <= end;
+}
+
+function render(data){
+
+    for(const tab of ["today","tomorrow"]){
+
+        let html = "";
+
+        for(const queue in data[tab]){
+
+            const q = data[tab][queue];
+            let statusClass = q.status === "on" ? "on" : "off";
+            let statusText = q.status === "on" ? "Є світло" : "Нема світла";
+
+            let activeClass = "";
+
+            q.periods.forEach(p=>{
+                if(isNowInPeriod(p.start,p.end) && tab==="today"){
+                    activeClass="active";
                 }
-                container.innerHTML += `<div class="card">
-                    <h2>Черга ${q} ${status}</h2>
-                    ${periodsHTML}
-                </div>`;
-            }
+            });
+
+            html += `
+            <div class="card ${activeClass}">
+                <h2>${queue}</h2>
+                <h3 class="${statusClass}">${statusText}</h3>
+            `;
+
+            q.periods.forEach(p=>{
+                html += `<div class="period">${p.start} - ${p.end}</div>`;
+            });
+
+            html += `</div>`;
         }
-        setInterval(loadData, 5000);
-    </script>
-    <style>
-        body { font-family: Arial; text-align:center; background:#0f172a; color:white; }
-        .card { display:inline
+
+        document.getElementById(tab).innerHTML = html;
+    }
+}
+
+async function loadData(){
+    const res = await fetch("/data");
+    const data = await res.json();
+    render(data);
+}
+
+setInterval(loadData, 30000);
+loadData();
+
+</script>
+
+</body>
+</html>

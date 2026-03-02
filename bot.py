@@ -1,55 +1,101 @@
 import os
 import json
-import re
-import asyncio
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import threading
+from datetime import datetime
+from flask import Flask, render_template, jsonify
+from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
-TOKEN = os.getenv("BOT_TOKEN")
+# --- КОНФИГУРАЦИЯ ---
+TOKEN = "BOT_TOKEN"
 DATA_FILE = "data.json"
 
+app = Flask(__name__)
+
+# --- ЛОГИКА РАБОТЫ С ДАННЫМИ ---
 def load_data():
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {"today": {}, "tomorrow": {}}
+    except Exception as e:
+        print(f"Ошибка чтения: {e}")
+        return {"today": {}, "tomorrow": {}}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text:
-        return
+def current_status(periods):
+    now = datetime.now().strftime("%H:%M")
+    for p in periods:
+        if p["start"] <= now <= p["end"]:
+            return "off"
+    return "on"
 
-    lines = text.strip().split("\n")
-    data = {}
-
+def parse_block(lines):
+    result = {}
     for line in lines:
-        parts = line.strip().split()
-        if len(parts) < 2:
-            continue
+        parts = line.split()
+        if len(parts) < 2: continue
         queue = parts[0]
-        periods = parts[1:]
-        for period in periods:
-            match = re.match(r"(\d{2}:\d{2})-(\d{2}:\d{2})", period)
-            if match:
-                start, end = match.groups()
-                data.setdefault(queue, [])
-                data[queue].append({"start": start, "end": end})
+        periods = []
+        for time_range in parts[1:]:
+            try:
+                start, end = time_range.split("-")
+                periods.append({"start": start, "end": end})
+            except: continue
+        result[queue] = periods
+    return result
+
+# --- ОБРАБОТЧИК ТЕЛЕГРАМ ---
+async def handle_tg_message(update, context):
+    text = update.message.text.lower()
+    data = load_data()
+
+    blocks = text.split("\n\n")
+    for block in blocks:
+        lines = block.strip().split("\n")
+        if not lines: continue
+        header = lines[0]
+        content = lines[1:]
+        if "сегодня" in header:
+            data["today"] = parse_block(content)
+        elif "завтра" in header:
+            data["tomorrow"] = parse_block(content)
 
     save_data(data)
-    await update.message.reply_text("✅ Всі періоди відключень оновлено!")
+    await update.message.reply_text("✅ Графік оновлено!")
 
-async def run_bot():
-    app_bot = ApplicationBuilder().token(TOKEN).build()
-    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    await app_bot.run_polling()
+# --- МАРШРУТЫ САЙТА (FLASK) ---
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-async def main():
-    await asyncio.gather(run_flask(), run_bot())
+@app.route("/data")
+def get_data():
+    raw = load_data()
+    result = {"today": {}, "tomorrow": {}}
+    for tab in ["today", "tomorrow"]:
+        for queue, periods in raw.get(tab, {}).items():
+            status = current_status(periods) if tab == "today" else "on"
+            result[tab][queue] = {"status": status, "periods": periods}
+    return jsonify(result)
 
+# --- ФУНКЦИЯ ЗАПУСКА БОТА ---
+def run_bot():
+    # Создаем приложение бота
+    tg_app = ApplicationBuilder().token(TOKEN).build()
+    tg_app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_tg_message))
+    print("BOT STARTED 🚀")
+    tg_app.run_polling(close_loop=False)
+
+# --- ЗАПУСК ВСЕГО ВМЕСТЕ ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    # 1. Запускаем бота в отдельном потоке, чтобы он не мешал сайту
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+
+    # 2. Запускаем сайт Flask
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
